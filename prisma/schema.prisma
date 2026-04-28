@@ -60,6 +60,9 @@ model Project {
   envFrontendPath     String?
   deployFrontendVps   Boolean  @default(false)
   cloudflareProject   String?
+  dbName              String?
+  dbUsername          String?
+  dbPasswordEnc       String?
   serverId            String
   server              VpsServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
   createdAt           DateTime @default(now())
@@ -78,4 +81,15 @@ model ActivityLog {
   createdAt DateTime @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model DeploymentJob {
+  id        String   @id @default(cuid())
+  status    String   @default("PENDING") // PENDING | RUNNING | SUCCESS | FAILED
+  log       String   @default("")
+  projectId String?
+  serverId  String
+  actorId   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

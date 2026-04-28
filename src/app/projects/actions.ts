@@ -1,5 +1,7 @@
 "use server";
 
+import { after } from "next/server";
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
@@ -17,13 +19,6 @@ const linkProjectSchema = z.object({
   branch: z.string().default("main"),
   domain: z.string().optional(),
   frontendDomain: z.string().optional(),
-  backendPath: z.string().min(1),
-  frontendPath: z.string().optional(),
-  envBackendPath: z.string().optional(),
-  envFrontendPath: z.string().optional(),
-  strapiPort: z.coerce.number().int().optional(),
-  adminerPort: z.coerce.number().int().optional(),
-  frontendPort: z.coerce.number().int().optional(),
   deployFrontendVps: z.boolean().optional(),
 });
 
@@ -37,33 +32,31 @@ export async function linkProjectAction(formData: FormData) {
     branch: formData.get("branch"),
     domain: formData.get("domain"),
     frontendDomain: formData.get("frontendDomain"),
-    backendPath: formData.get("backendPath"),
-    frontendPath: formData.get("frontendPath"),
-    envBackendPath: formData.get("envBackendPath"),
-    envFrontendPath: formData.get("envFrontendPath"),
-    strapiPort: formData.get("strapiPort"),
-    adminerPort: formData.get("adminerPort"),
-    frontendPort: formData.get("frontendPort"),
     deployFrontendVps: formData.get("deployFrontendVps") === "on",
   });
 
   if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? "Invalid form");
 
   const input = parsed.data;
+  const base = `/opt/strapi-sites/${input.siteName}/repo`;
 
   await prisma.project.create({
     data: {
-      ...input,
+      serverId: input.serverId,
+      name: input.name,
+      siteName: input.siteName,
+      repoUrl: input.repoUrl,
       branch: input.branch || "main",
-      envBackendPath: input.envBackendPath || `${input.backendPath}/.env`,
-      envFrontendPath: input.envFrontendPath || (input.frontendPath ? `${input.frontendPath}/.env` : null),
-      frontendPath: input.frontendPath || null,
-      strapiPort: input.strapiPort || null,
-      adminerPort: input.adminerPort || null,
-      frontendPort: input.frontendPort || null,
       domain: input.domain || null,
       frontendDomain: input.frontendDomain || null,
       deployFrontendVps: !!input.deployFrontendVps,
+      backendPath: `${base}/Backend`,
+      frontendPath: input.deployFrontendVps ? `${base}/Frontend` : null,
+      envBackendPath: `${base}/Backend/.env`,
+      envFrontendPath: input.deployFrontendVps ? `${base}/Frontend/.env` : null,
+      strapiPort: randomPort(),
+      adminerPort: randomPort(),
+      frontendPort: input.deployFrontendVps ? randomPort() : null,
     },
   });
 
@@ -73,8 +66,8 @@ export async function linkProjectAction(formData: FormData) {
 const deploySchema = z.object({
   serverId: z.string().min(1),
   projectName: z.string().min(2),
+  repoName: z.string().min(2).regex(/^[a-z0-9_-]+$/i, "Repo name may only contain letters, numbers, hyphens and underscores"),
   siteName: z.string().min(2),
-  repoUrl: z.string().min(4),
   branch: z.string().default("main"),
   domain: z.string().min(3),
   frontendDomain: z.string().optional(),
@@ -89,6 +82,11 @@ function randomSecret(bytes = 32) {
   return randomBytes(bytes).toString("base64");
 }
 
+/** Returns a random unprivileged port in the range 10000–19999 */
+function randomPort() {
+  return 10000 + Math.floor(Math.random() * 10000);
+}
+
 export async function deployFromTemplateAction(formData: FormData) {
   const user = await requireUser();
   if (user.role === "VIEWER") throw new Error("Viewers cannot deploy.");
@@ -96,8 +94,8 @@ export async function deployFromTemplateAction(formData: FormData) {
   const parsed = deploySchema.safeParse({
     serverId: formData.get("serverId"),
     projectName: formData.get("projectName"),
+    repoName: formData.get("repoName"),
     siteName: formData.get("siteName"),
-    repoUrl: formData.get("repoUrl"),
     branch: formData.get("branch"),
     domain: formData.get("domain"),
     frontendDomain: formData.get("frontendDomain"),
@@ -115,41 +113,55 @@ export async function deployFromTemplateAction(formData: FormData) {
   if (!server) throw new Error("Server not found");
 
   const privateKey = decryptSecret(server.privateKeyEnc);
-  if (!privateKey) throw new Error("This deployment path currently requires SSH key auth on the server.");
+  const vpsPassword = decryptSecret(server.passwordEnc);
 
-  const result = await deployForgeProject({
-    projectName: input.projectName,
-    siteName: input.siteName,
-    repoUrl: input.repoUrl,
-    branch: input.branch,
-    domain: input.domain,
-    frontendDomain: input.frontendDomain,
-    sslEmail: input.sslEmail,
-    dbName: input.dbName,
-    dbUsername: input.dbUsername,
-    dbPassword: input.dbPassword,
-    strapiAppKeys: `${randomSecret()},${randomSecret()}`,
-    strapiAdminJwtSecret: randomSecret(),
-    strapiJwtSecret: randomSecret(),
-    strapiApiTokenSalt: randomSecret(),
-    strapiTransferTokenSalt: randomSecret(),
-    strapiEncryptionKey: randomSecret(),
-    deployFrontendVps: !!input.deployFrontendVps,
-    server: {
-      id: server.id,
-      host: server.host,
-      username: server.username,
-      port: server.port,
-      privateKey,
+  if (!privateKey && !vpsPassword) {
+    throw new Error("Server has no credentials configured (no SSH key and no password).");
+  }
+
+  // Create the job record immediately so the user can track progress
+  const job = await prisma.deploymentJob.create({
+    data: {
+      status: "PENDING",
+      serverId: server.id,
+      actorId: user.id,
     },
-    actorId: user.id,
   });
 
-  revalidatePath("/projects");
+  // Fire the actual deploy after the response is sent — avoids HTTP timeout
+  after(async () => {
+    await deployForgeProject({
+      jobId: job.id,
+      projectName: input.projectName,
+      repoName: input.repoName,
+      siteName: input.siteName,
+      branch: input.branch,
+      domain: input.domain,
+      frontendDomain: input.frontendDomain,
+      sslEmail: input.sslEmail,
+      dbName: input.dbName,
+      dbUsername: input.dbUsername,
+      dbPassword: input.dbPassword,
+      strapiAppKeys: `${randomSecret()},${randomSecret()}`,
+      strapiAdminJwtSecret: randomSecret(),
+      strapiJwtSecret: randomSecret(),
+      strapiApiTokenSalt: randomSecret(),
+      strapiTransferTokenSalt: randomSecret(),
+      strapiEncryptionKey: randomSecret(),
+      deployFrontendVps: !!input.deployFrontendVps,
+      server: {
+        id: server.id,
+        host: server.host,
+        username: server.username,
+        port: server.port,
+        privateKey: privateKey ?? undefined,
+        password: vpsPassword ?? undefined,
+      },
+      actorId: user.id,
+    });
+  });
 
-  if (!result.ok) {
-    throw new Error(result.output.slice(-500));
-  }
+  redirect(`/projects/deploy/${job.id}`);
 }
 
 export async function projectOperationAction(formData: FormData) {

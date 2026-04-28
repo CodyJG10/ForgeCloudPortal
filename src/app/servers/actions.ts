@@ -65,18 +65,21 @@ export async function createServerAction(formData: FormData) {
   revalidatePath("/servers");
 }
 
-export async function testServerConnectionAction(formData: FormData) {
+export async function testServerConnectionAction(
+  _prev: { ok: boolean; message: string } | null,
+  formData: FormData
+): Promise<{ ok: boolean; message: string }> {
   await requireUser();
   const id = String(formData.get("id") ?? "");
-  if (!id) throw new Error("Missing server id");
+  if (!id) return { ok: false, message: "Missing server id" };
 
   const server = await prisma.vpsServer.findUnique({ where: { id } });
-  if (!server) throw new Error("Server not found");
+  if (!server) return { ok: false, message: "Server not found" };
 
   const result = await runCommand(server, "echo connected && uname -a");
-  if (!result.ok) throw new Error(result.stderr || "Connection failed");
+  if (!result.ok) return { ok: false, message: result.stderr || "Connection failed" };
 
-  revalidatePath("/servers");
+  return { ok: true, message: result.stdout.trim() || "Connected successfully" };
 }
 
 export async function deleteServerAction(formData: FormData) {
@@ -85,6 +88,61 @@ export async function deleteServerAction(formData: FormData) {
 
   const id = String(formData.get("id") ?? "");
   await prisma.vpsServer.delete({ where: { id } });
+
+  revalidatePath("/servers");
+}
+
+const updateServerSchema = serverSchema.extend({
+  id: z.string().min(1),
+  clearPrivateKey: z.boolean().optional(),
+  clearPassword: z.boolean().optional(),
+});
+
+export async function updateServerAction(formData: FormData) {
+  await requireUser();
+
+  const parsed = updateServerSchema.safeParse({
+    id: formData.get("id"),
+    name: formData.get("name"),
+    host: formData.get("host"),
+    port: formData.get("port"),
+    username: formData.get("username"),
+    authType: formData.get("authType"),
+    privateKey: formData.get("privateKey"),
+    passphrase: formData.get("passphrase"),
+    password: formData.get("password"),
+    defaultProjectDir: formData.get("defaultProjectDir"),
+    notes: formData.get("notes"),
+  });
+
+  if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? "Invalid input");
+  const input = parsed.data;
+
+  const existing = await prisma.vpsServer.findUnique({ where: { id: input.id } });
+  if (!existing) throw new Error("Server not found");
+
+  await prisma.vpsServer.update({
+    where: { id: input.id },
+    data: {
+      name: input.name,
+      host: input.host,
+      port: input.port,
+      username: input.username,
+      authType: input.authType,
+      // Only overwrite encrypted fields when new values are provided
+      ...(input.privateKey?.trim()
+        ? { privateKeyEnc: encryptSecret(input.privateKey) }
+        : {}),
+      ...(input.passphrase?.trim()
+        ? { passphraseEnc: encryptSecret(input.passphrase) }
+        : {}),
+      ...(input.password?.trim()
+        ? { passwordEnc: encryptSecret(input.password) }
+        : {}),
+      defaultProjectDir: input.defaultProjectDir,
+      notes: input.notes,
+    },
+  });
 
   revalidatePath("/servers");
 }

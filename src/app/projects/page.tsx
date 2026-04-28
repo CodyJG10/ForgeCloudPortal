@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Button, Card, Input } from "@/components/ui";
 import { linkProjectAction, removeProjectAction } from "./actions";
+import { DeleteButton } from "@/components/delete-button";
 
 export default async function ProjectsPage() {
   const user = await requireUser();
@@ -31,17 +32,33 @@ export default async function ProjectsPage() {
               </select>
             </div>
 
-            <Input name="name" placeholder="Elixir Aesthetics" required />
-            <Input name="siteName" placeholder="elixir-medspa" required />
-            <Input name="repoUrl" placeholder="https://github.com/CodyJG10/ForgeTemplate.git" required className="md:col-span-2" />
-            <Input name="branch" defaultValue="main" />
-            <Input name="domain" placeholder="api.example.com" />
-            <Input name="frontendDomain" placeholder="www.example.com" />
-            <Input name="backendPath" placeholder="/opt/strapi-sites/elixir-medspa/repo/Backend" required className="md:col-span-2" />
-            <Input name="frontendPath" placeholder="/opt/strapi-sites/elixir-medspa/repo/Frontend" className="md:col-span-2" />
-            <Input name="strapiPort" type="number" placeholder="1337" />
-            <Input name="adminerPort" type="number" placeholder="9090" />
-            <Input name="frontendPort" type="number" placeholder="4321" />
+            <div>
+              <label className="mb-1 block text-sm text-zinc-300">Project Name</label>
+              <Input name="name" placeholder="My Client Project" required />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-zinc-300">Site Slug</label>
+              <Input name="siteName" placeholder="my-client-site" required />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="mb-1 block text-sm text-zinc-300">Repository URL</label>
+              <Input name="repoUrl" placeholder="https://github.com/org/repo.git" required />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm text-zinc-300">Branch</label>
+              <Input name="branch" defaultValue="main" />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-zinc-300">Backend Domain</label>
+              <Input name="domain" placeholder="api.example.com" />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-zinc-300">Frontend Domain (optional)</label>
+              <Input name="frontendDomain" placeholder="www.example.com" />
+            </div>
+
             <label className="flex items-center gap-2 text-sm text-zinc-300 md:col-span-2">
               <input type="checkbox" name="deployFrontendVps" /> Frontend runs on this VPS (docker compose profile full)
             </label>
@@ -96,12 +113,14 @@ export default async function ProjectsPage() {
                         Open
                       </Link>
                       {user.role === "ADMIN" ? (
-                        <form action={removeProjectAction}>
-                          <input type="hidden" name="projectId" value={project.id} />
-                          <button type="submit" className="rounded bg-red-700 px-2 py-1 text-xs hover:bg-red-600">
-                            Remove
-                          </button>
-                        </form>
+                        <DeleteButton
+                          action={removeProjectAction}
+                          idName="projectId"
+                          idValue={project.id}
+                          label="Remove"
+                          className="rounded bg-red-700 px-2 py-1 text-xs hover:bg-red-600"
+                          confirmMessage={`Remove project "${project.name}"? This cannot be undone.`}
+                        />
                       ) : null}
                     </div>
                   </td>
