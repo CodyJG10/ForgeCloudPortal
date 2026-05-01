@@ -23,7 +23,8 @@ RUN apt-get update && \
       ansible \
       openssh-client \
       git \
-      python3 && \
+      python3 \
+      sshpass && \
     rm -rf /var/lib/apt/lists/*
 
 # Clone ForgeTemplate so the Ansible playbooks are available at runtime
