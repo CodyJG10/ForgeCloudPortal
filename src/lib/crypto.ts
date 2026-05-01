@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 
-const SECRET = process.env.ENCRYPTION_KEY ?? "dev-encryption-key-change-me";
+const SECRET = process.env.ENCRYPTION_KEY || "dev-encryption-key-change-me";
 const KEY = createHash("sha256").update(SECRET).digest();
 
 export function encryptSecret(value: string) {
